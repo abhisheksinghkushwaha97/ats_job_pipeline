@@ -1,0 +1,782 @@
+{
+  "name": "ATS Job Application Pipeline (Gemini + Multi-Portal)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8,20 * * *"
+            }
+          ]
+        }
+      },
+      "id": "node-01-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cfg-01",
+              "name": "job_title_input",
+              "value": "Software Engineer",
+              "type": "string"
+            },
+            {
+              "id": "cfg-02",
+              "name": "google_drive_file_id",
+              "value": "YOUR_GOOGLE_DRIVE_FILE_ID_HERE",
+              "type": "string"
+            },
+            {
+              "id": "cfg-03",
+              "name": "linkedin_profile_text",
+              "value": "Paste your LinkedIn About section, skills list, and headline here. Or leave blank.",
+              "type": "string"
+            },
+            {
+              "id": "cfg-04",
+              "name": "gemini_api_key",
+              "value": "YOUR_GEMINI_API_KEY",
+              "type": "string"
+            },
+            {
+              "id": "cfg-05",
+              "name": "gemini_model",
+              "value": "gemini-2.0-flash",
+              "type": "string"
+            },
+            {
+              "id": "cfg-06",
+              "name": "serpapi_key",
+              "value": "YOUR_SERPAPI_KEY",
+              "type": "string"
+            },
+            {
+              "id": "cfg-07",
+              "name": "rapidapi_key",
+              "value": "YOUR_RAPIDAPI_KEY",
+              "type": "string"
+            },
+            {
+              "id": "cfg-08",
+              "name": "adzuna_app_id",
+              "value": "YOUR_ADZUNA_APP_ID",
+              "type": "string"
+            },
+            {
+              "id": "cfg-09",
+              "name": "adzuna_api_key",
+              "value": "YOUR_ADZUNA_API_KEY",
+              "type": "string"
+            },
+            {
+              "id": "cfg-10",
+              "name": "sheet_id",
+              "value": "YOUR_GOOGLE_SHEET_ID",
+              "type": "string"
+            },
+            {
+              "id": "cfg-11",
+              "name": "sheet_name",
+              "value": "Applications",
+              "type": "string"
+            },
+            {
+              "id": "cfg-12",
+              "name": "notification_email",
+              "value": "your.email@gmail.com",
+              "type": "string"
+            },
+            {
+              "id": "cfg-13",
+              "name": "ats_threshold",
+              "value": "50",
+              "type": "string"
+            },
+            {
+              "id": "cfg-14",
+              "name": "location",
+              "value": "United States",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-02-config",
+      "name": "Set Config Variables",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.google_drive_file_id }}"
+        },
+        "options": {
+          "googleFileConversion": {
+            "conversion": {
+              "docsToFormat": "text/plain"
+            }
+          }
+        }
+      },
+      "id": "node-03-drive",
+      "name": "Google Drive: Download Resume",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [750, 300],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "google-drive-cred",
+          "name": "Google Drive Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ═══════════════════════════════════════════\n// EXTRACT RESUME TEXT FROM GOOGLE DRIVE BINARY\n// ═══════════════════════════════════════════\nconst items = $input.all();\nconst firstItem = items[0];\nlet resumeText = '';\n\n// Method 1: Binary data (Google Doc exported as text/plain)\nif (firstItem.binary) {\n  const binaryKey = Object.keys(firstItem.binary)[0] || 'data';\n  const binaryItem = firstItem.binary[binaryKey];\n  if (binaryItem && binaryItem.data) {\n    try {\n      resumeText = Buffer.from(binaryItem.data, 'base64').toString('utf-8');\n    } catch (e) {\n      resumeText = String(binaryItem.data);\n    }\n  }\n}\n\n// Method 2: Fallback to JSON fields\nif (!resumeText) {\n  resumeText = firstItem.json.text || firstItem.json.data || firstItem.json.content || '';\n  if (typeof resumeText !== 'string') resumeText = JSON.stringify(resumeText);\n}\n\nif (!resumeText || resumeText.trim().length < 50) {\n  throw new Error('Resume text extraction failed. Ensure your resume is a Google Doc in Drive.');\n}\n\nconst config = $('Set Config Variables').first().json;\n\nreturn [{\n  json: {\n    resume_text: resumeText.trim(),\n    linkedin_profile_text: config.linkedin_profile_text || '',\n    job_title_input: config.job_title_input,\n    location: config.location || 'United States',\n    gemini_model: config.gemini_model || 'gemini-2.0-flash',\n    ats_threshold: parseInt(config.ats_threshold) || 50\n  }\n}];"
+      },
+      "id": "node-04-extract",
+      "name": "Code: Extract Resume Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://serpapi.com/search.json",
+        "authentication": "none",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "engine", "value": "google_jobs" },
+            { "name": "q", "value": "={{ $('Code: Extract Resume Text').first().json.job_title_input }}" },
+            { "name": "location", "value": "={{ $('Code: Extract Resume Text').first().json.location }}" },
+            { "name": "api_key", "value": "={{ $('Set Config Variables').first().json.serpapi_key }}" },
+            { "name": "num", "value": "20" },
+            { "name": "chips", "value": "date_posted:week" }
+          ]
+        },
+        "options": { "response": { "response": { "responseFormat": "autodetect" } } }
+      },
+      "id": "node-05-serpapi",
+      "name": "HTTP: SerpAPI Google Jobs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1300, 300],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://jsearch.p.rapidapi.com/search",
+        "authentication": "none",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "query", "value": "={{ $('Code: Extract Resume Text').first().json.job_title_input + ' in ' + $('Code: Extract Resume Text').first().json.location }}" },
+            { "name": "page", "value": "1" },
+            { "name": "num_pages", "value": "2" },
+            { "name": "date_posted", "value": "week" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-RapidAPI-Key", "value": "={{ $('Set Config Variables').first().json.rapidapi_key }}" },
+            { "name": "X-RapidAPI-Host", "value": "jsearch.p.rapidapi.com" }
+          ]
+        },
+        "options": { "response": { "response": { "responseFormat": "autodetect" } } }
+      },
+      "id": "node-06-jsearch",
+      "name": "HTTP: JSearch (LinkedIn/Indeed)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1550, 300],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.adzuna.com/v1/api/jobs/us/search/1",
+        "authentication": "none",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "app_id", "value": "={{ $('Set Config Variables').first().json.adzuna_app_id }}" },
+            { "name": "app_key", "value": "={{ $('Set Config Variables').first().json.adzuna_api_key }}" },
+            { "name": "what", "value": "={{ $('Code: Extract Resume Text').first().json.job_title_input }}" },
+            { "name": "results_per_page", "value": "20" },
+            { "name": "max_days_old", "value": "7" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "options": { "response": { "response": { "responseFormat": "autodetect" } } }
+      },
+      "id": "node-07-adzuna",
+      "name": "HTTP: Adzuna Jobs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1800, 300],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://remoteok.com/api",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "n8n-ats-pipeline/1.0" }
+          ]
+        },
+        "options": { "response": { "response": { "responseFormat": "autodetect" } } }
+      },
+      "id": "node-08-remoteok",
+      "name": "HTTP: RemoteOK",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2050, 300],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ══════════════════════════════════════════════════════════════\n// PARSE & MERGE RESULTS FROM ALL 4 JOB PORTALS\n// Each portal has a different response format — normalize here\n// ══════════════════════════════════════════════════════════════\nconst config = $('Code: Extract Resume Text').first().json;\nconst allJobs = [];\n\n// ─── 1. SerpAPI Google Jobs ───────────────────────────────────\ntry {\n  const serpData = $('HTTP: SerpAPI Google Jobs').first().json;\n  const serpJobs = serpData.jobs_results || [];\n  for (const job of serpJobs) {\n    let applyLink = 'N/A';\n    if (job.apply_options && job.apply_options.length > 0) {\n      applyLink = job.apply_options[0].link;\n    } else if (job.share_link) {\n      applyLink = job.share_link;\n    } else if (job.related_links && job.related_links.length > 0) {\n      applyLink = job.related_links[0].link;\n    }\n    let desc = job.description || '';\n    if (job.job_highlights) {\n      for (const h of job.job_highlights) {\n        desc += '\\n\\n' + (h.title || '') + ':\\n';\n        if (h.items) desc += h.items.map(x => '• ' + x).join('\\n');\n      }\n    }\n    allJobs.push({\n      source: 'Google Jobs',\n      job_title: job.title || '',\n      company: job.company_name || '',\n      location: job.location || '',\n      job_description: desc,\n      apply_url: applyLink,\n      posted_at: (job.detected_extensions || {}).posted_at || ''\n    });\n  }\n} catch (e) { /* SerpAPI unavailable or failed */ }\n\n// ─── 2. JSearch (LinkedIn, Indeed, Glassdoor, ZipRecruiter) ───\ntry {\n  const jsData = $('HTTP: JSearch (LinkedIn/Indeed)').first().json;\n  const jsJobs = jsData.data || [];\n  for (const job of jsJobs) {\n    allJobs.push({\n      source: 'JSearch (' + (job.job_publisher || 'Multi') + ')',\n      job_title: job.job_title || '',\n      company: job.employer_name || '',\n      location: [job.job_city, job.job_state, job.job_country].filter(Boolean).join(', ') || '',\n      job_description: job.job_description || '',\n      apply_url: job.job_apply_link || '',\n      posted_at: job.job_posted_at_datetime_utc || ''\n    });\n  }\n} catch (e) { /* JSearch unavailable or failed */ }\n\n// ─── 3. Adzuna ───────────────────────────────────────────────\ntry {\n  const azData = $('HTTP: Adzuna Jobs').first().json;\n  const azJobs = azData.results || [];\n  for (const job of azJobs) {\n    allJobs.push({\n      source: 'Adzuna',\n      job_title: job.title || '',\n      company: (job.company && job.company.display_name) || '',\n      location: (job.location && job.location.display_name) || '',\n      job_description: job.description || '',\n      apply_url: job.redirect_url || '',\n      posted_at: job.created || ''\n    });\n  }\n} catch (e) { /* Adzuna unavailable or failed */ }\n\n// ─── 4. RemoteOK (free, no auth) ─────────────────────────────\ntry {\n  const roItems = $('HTTP: RemoteOK').all();\n  const titleLower = (config.job_title_input || '').toLowerCase();\n  const titleWords = titleLower.split(/\\s+/).filter(w => w.length > 2);\n  for (const item of roItems) {\n    const job = item.json;\n    if (job.legal || (!job.position && !job.company)) continue;\n    const posLower = (job.position || '').toLowerCase();\n    const isRelevant = titleWords.some(word => posLower.includes(word))\n      || (job.tags && job.tags.some(t => titleLower.includes(t.toLowerCase())));\n    if (isRelevant) {\n      allJobs.push({\n        source: 'RemoteOK',\n        job_title: job.position || '',\n        company: job.company || '',\n        location: job.location || 'Remote',\n        job_description: (job.description || '').replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim(),\n        apply_url: job.url ? ('https://remoteok.com' + job.url) : '',\n        posted_at: job.date || ''\n      });\n    }\n  }\n} catch (e) { /* RemoteOK unavailable or failed */ }\n\n// ─── Normalize & output ──────────────────────────────────────\nif (allJobs.length === 0) {\n  return [{ json: { no_new_jobs: true, error: 'No jobs returned from any portal' } }];\n}\n\nconst today = new Date().toISOString().split('T')[0];\nreturn allJobs.map((job, i) => ({\n  json: {\n    job_id: `job_${Date.now()}_${i}`,\n    ...job,\n    date_found: today,\n    resume_text: config.resume_text,\n    linkedin_profile_text: config.linkedin_profile_text,\n    gemini_model: config.gemini_model,\n    ats_threshold: config.ats_threshold\n  }\n}));"
+      },
+      "id": "node-09-parse-all",
+      "name": "Code: Parse & Merge All Jobs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2350, 300]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Set Config Variables').first().json.sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "={{ $('Set Config Variables').first().json.sheet_name }}"
+        },
+        "options": {}
+      },
+      "id": "node-10-read-sheet",
+      "name": "Google Sheets: Read Existing",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [2600, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-cred",
+          "name": "Google Sheets Account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ═══════════════════════════════════════\n// DEDUPLICATE: REMOVE ALREADY-PROCESSED JOBS\n// ═══════════════════════════════════════\nconst newJobs = $('Code: Parse & Merge All Jobs').all();\nconst existingEntries = $('Google Sheets: Read Existing').all();\n\nif (newJobs.length === 1 && newJobs[0].json.no_new_jobs) {\n  return [{ json: { no_new_jobs: true } }];\n}\n\nconst existingKeys = new Set();\nfor (const entry of existingEntries) {\n  if (entry.json && entry.json['Company'] && entry.json['Job Title']) {\n    const key = `${(entry.json['Company'] || '').toLowerCase().trim()}_${(entry.json['Job Title'] || '').toLowerCase().trim()}`;\n    existingKeys.add(key);\n  }\n  if (entry.json && entry.json['Job URL'] && entry.json['Job URL'] !== 'N/A') {\n    existingKeys.add(entry.json['Job URL'].toLowerCase().trim());\n  }\n}\n\nconst uniqueJobs = [];\nfor (const job of newJobs) {\n  const compKey = `${job.json.company.toLowerCase().trim()}_${job.json.job_title.toLowerCase().trim()}`;\n  const urlKey = (job.json.apply_url || '').toLowerCase().trim();\n  if (!existingKeys.has(compKey) && (!urlKey || urlKey === 'n/a' || !existingKeys.has(urlKey))) {\n    uniqueJobs.push(job);\n    existingKeys.add(compKey);\n    if (urlKey && urlKey !== 'n/a') existingKeys.add(urlKey);\n  }\n}\n\nif (uniqueJobs.length === 0) {\n  return [{ json: { no_new_jobs: true } }];\n}\n\nreturn uniqueJobs;"
+      },
+      "id": "node-11-dedup",
+      "name": "Code: Deduplicate Jobs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2850, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "" },
+          "conditions": [
+            {
+              "id": "cond-new-jobs",
+              "leftValue": "={{ $json.job_title }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "exists" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-12-if-jobs",
+      "name": "IF: New Jobs Found",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [3100, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "node-13-split",
+      "name": "Split In Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [3350, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ═══════════════════════════════════════════════════════\n// PREPARE GEMINI REQUEST: ATS ANALYSIS & SCORING\n// ═══════════════════════════════════════════════════════\nconst item = $input.first().json;\nconst config = $('Set Config Variables').first().json;\n\nconst systemPrompt = 'You are an ATS (Applicant Tracking System) analysis expert. Analyze the match between a candidate\\'s resume/LinkedIn profile and a job description.\\n\\nYour analysis must:\\n1. Extract ALL important keywords from the job description (hard skills, soft skills, tools, technologies, certifications, qualifications, industry terms)\\n2. Compare these keywords against BOTH the resume AND LinkedIn profile\\n3. Identify MATCHING keywords (found in resume or LinkedIn)\\n4. Identify MISSING keywords (in job description but absent from resume/LinkedIn)\\n5. Assess experience-level alignment\\n6. Calculate an ATS compatibility score (0-100) using:\\n   - Keyword match percentage (40% weight)\\n   - Skill alignment depth (30% weight)\\n   - Experience relevance (30% weight)\\n\\nReturn ONLY a valid JSON object with this EXACT structure:\\n{\\n  \"ats_score\": <number 0-100>,\\n  \"matching_keywords\": [\"keyword1\", \"keyword2\"],\\n  \"missing_keywords\": [\"keyword3\", \"keyword4\"],\\n  \"skill_overlap_percentage\": <number>,\\n  \"experience_match\": \"<brief 1-sentence assessment>\",\\n  \"recommendation\": \"<1-2 sentence actionable recommendation>\"\\n}';\n\nconst userPrompt = `CANDIDATE RESUME:\\n${item.resume_text}\\n\\nLINKEDIN PROFILE:\\n${item.linkedin_profile_text || 'Not provided'}\\n\\nTARGET JOB TITLE: ${item.job_title}\\nCOMPANY: ${item.company}\\nLOCATION: ${item.location}\\nSOURCE: ${item.source || 'N/A'}\\n\\nFULL JOB DESCRIPTION:\\n${item.job_description}`;\n\nconst geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${config.gemini_model || 'gemini-2.0-flash'}:generateContent?key=${config.gemini_api_key}`;\n\nconst requestBody = JSON.stringify({\n  systemInstruction: { parts: [{ text: systemPrompt }] },\n  contents: [{ role: 'user', parts: [{ text: userPrompt }] }],\n  generationConfig: {\n    temperature: 0.2,\n    maxOutputTokens: 8192,\n    responseMimeType: 'application/json'\n  }\n});\n\nreturn [{ json: { ...item, requestBody, gemini_url: geminiUrl } }];"
+      },
+      "id": "node-14-prep-ats",
+      "name": "Code: Prepare ATS Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3600, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.gemini_url }}",
+        "authentication": "none",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.requestBody }}",
+        "options": {}
+      },
+      "id": "node-15-gemini-ats",
+      "name": "HTTP: Gemini ATS Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3850, 300],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ═══════════════════════════════════════════\n// PARSE ATS ANALYSIS RESULTS FROM GEMINI\n// ═══════════════════════════════════════════\nconst apiResponse = $input.first().json;\nconst prevData = $('Code: Prepare ATS Request').first().json;\n\nlet atsResult;\ntry {\n  const content = apiResponse.candidates[0].content.parts[0].text;\n  atsResult = JSON.parse(content);\n} catch (e) {\n  atsResult = {\n    ats_score: 0,\n    matching_keywords: [],\n    missing_keywords: [],\n    skill_overlap_percentage: 0,\n    experience_match: 'Error: Could not parse Gemini ATS analysis',\n    recommendation: 'Manual review required — AI analysis failed'\n  };\n}\n\nconst atsScore = Math.min(100, Math.max(0, parseInt(atsResult.ats_score) || 0));\n\nreturn [{\n  json: {\n    job_id: prevData.job_id,\n    job_title: prevData.job_title,\n    company: prevData.company,\n    location: prevData.location,\n    source: prevData.source || '',\n    job_description: prevData.job_description,\n    apply_url: prevData.apply_url,\n    date_found: prevData.date_found,\n    resume_text: prevData.resume_text,\n    linkedin_profile_text: prevData.linkedin_profile_text,\n    gemini_model: prevData.gemini_model,\n    ats_threshold: prevData.ats_threshold,\n    ats_score: atsScore,\n    matching_keywords: atsResult.matching_keywords || [],\n    missing_keywords: atsResult.missing_keywords || [],\n    skill_overlap_percentage: atsResult.skill_overlap_percentage || 0,\n    experience_match: atsResult.experience_match || '',\n    recommendation: atsResult.recommendation || ''\n  }\n}];"
+      },
+      "id": "node-16-parse-ats",
+      "name": "Code: Parse ATS Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4100, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "" },
+          "conditions": [
+            {
+              "id": "cond-score",
+              "leftValue": "={{ $json.ats_score }}",
+              "rightValue": 50,
+              "operator": { "type": "number", "operation": "gte" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-17-if-score",
+      "name": "IF: Score Above Threshold",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [4350, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ═══════════════════════════════════════════════════════════\n// PREPARE GEMINI REQUEST: RESUME KEYWORD OPTIMIZATION\n// CRITICAL: No content changes — only ATS keyword injection\n// ═══════════════════════════════════════════════════════════\nconst item = $input.first().json;\nconst config = $('Set Config Variables').first().json;\n\nconst systemPrompt = 'You are an ATS resume optimization specialist. Your SOLE task is to optimize a resume for ATS keyword matching against a specific job description.\\n\\n=== ABSOLUTE RULES ===\\n\\n✅ ALLOWED CHANGES ONLY:\\n- Add missing ATS keywords that GENUINELY ALIGN with existing experience\\n- Reorder bullet points within a job entry for better relevance\\n- Add industry-standard synonyms of existing skills (e.g., if \"JS\" exists, also mention \"JavaScript\")\\n- Emphasize existing skills that match the job description by minor rephrasing\\n- Add a \"Key Skills\" or \"Technical Skills\" section if not present, using ONLY skills evidenced in the resume\\n\\n❌ STRICTLY FORBIDDEN — VIOLATION IS UNACCEPTABLE:\\n- Do NOT fabricate or invent new experience, projects, or achievements\\n- Do NOT add tools, technologies, or skills the candidate does not already demonstrate\\n- Do NOT change job titles, employment dates, company names, or education details\\n- Do NOT remove ANY existing bullet points or content\\n- Do NOT alter the factual meaning of any statement\\n- Do NOT add metrics or numbers not in the original\\n- Do NOT invent responsibilities or skills\\n\\nThe resume must remain 100% FACTUALLY IDENTICAL — only ATS-optimized.\\n\\nReturn ONLY a valid JSON object:\\n{\\n  \"optimized_resume\": \"<the complete optimized resume text>\",\\n  \"keywords_added\": [\"keyword1\", \"keyword2\"],\\n  \"changes_made\": [\"description of change 1\"],\\n  \"final_ats_score\": <estimated new score 0-100>\\n}';\n\nconst userPrompt = `ORIGINAL RESUME (DO NOT ALTER FACTS):\\n${item.resume_text}\\n\\nTARGET JOB: ${item.job_title} at ${item.company}\\nSOURCE: ${item.source || 'N/A'}\\n\\nJOB DESCRIPTION:\\n${item.job_description}\\n\\nMISSING KEYWORDS TO CONSIDER (only if genuinely aligned):\\n${(item.missing_keywords || []).join(', ')}\\n\\nMATCHING KEYWORDS:\\n${(item.matching_keywords || []).join(', ')}\\n\\nCURRENT ATS SCORE: ${item.ats_score}/100`;\n\nconst geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${config.gemini_model || 'gemini-2.0-flash'}:generateContent?key=${config.gemini_api_key}`;\n\nconst requestBody = JSON.stringify({\n  systemInstruction: { parts: [{ text: systemPrompt }] },\n  contents: [{ role: 'user', parts: [{ text: userPrompt }] }],\n  generationConfig: {\n    temperature: 0.15,\n    maxOutputTokens: 16384,\n    responseMimeType: 'application/json'\n  }\n});\n\nreturn [{ json: { ...item, requestBody, gemini_url: geminiUrl } }];"
+      },
+      "id": "node-18-prep-opt",
+      "name": "Code: Prepare Resume Opt Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4600, 150]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.gemini_url }}",
+        "authentication": "none",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.requestBody }}",
+        "options": {}
+      },
+      "id": "node-19-gemini-opt",
+      "name": "HTTP: Gemini Resume Optimization",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [4850, 150],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ══════════════════════════════════════════════════════════\n// PARSE RESUME OPTIMIZATION + PREPARE COVER LETTER REQUEST\n// ══════════════════════════════════════════════════════════\nconst apiResponse = $input.first().json;\nconst prevData = $('Code: Prepare Resume Opt Request').first().json;\nconst config = $('Set Config Variables').first().json;\n\nlet optResult;\ntry {\n  const content = apiResponse.candidates[0].content.parts[0].text;\n  optResult = JSON.parse(content);\n} catch (e) {\n  optResult = {\n    optimized_resume: prevData.resume_text,\n    keywords_added: [],\n    changes_made: ['Error: Could not parse Gemini optimization. Original resume preserved.'],\n    final_ats_score: prevData.ats_score\n  };\n}\n\n// Build Cover Letter request\nconst systemPrompt = 'You are an expert cover letter writer specializing in ATS-optimized, recruiter-friendly cover letters.\\n\\nRequirements:\\n- Address the SPECIFIC company and role by name — never placeholders\\n- Open with an engaging hook (not \"I am writing to express my interest\")\\n- Highlight 3-4 relevant experiences from the resume that match the job\\n- Naturally weave in job description keywords\\n- Show genuine enthusiasm for the company\\n- Close with a confident call to action\\n- Keep concise: 3-4 paragraphs, under 350 words\\n- Professional yet personable tone\\n- NO generic mass-apply language\\n\\nReturn ONLY a valid JSON object:\\n{\\n  \"cover_letter\": \"<the complete cover letter text>\",\\n  \"key_highlights\": [\"highlight 1\", \"highlight 2\", \"highlight 3\"]\\n}';\n\nconst userPrompt = `CANDIDATE RESUME:\\n${optResult.optimized_resume || prevData.resume_text}\\n\\nJOB TITLE: ${prevData.job_title}\\nCOMPANY: ${prevData.company}\\nLOCATION: ${prevData.location}\\nSOURCE: ${prevData.source || 'N/A'}\\n\\nFULL JOB DESCRIPTION:\\n${prevData.job_description}\\n\\nMATCHING SKILLS: ${(prevData.matching_keywords || []).join(', ')}\\nNEWLY ADDED KEYWORDS: ${(optResult.keywords_added || []).join(', ')}`;\n\nconst geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${config.gemini_model || 'gemini-2.0-flash'}:generateContent?key=${config.gemini_api_key}`;\n\nconst requestBody = JSON.stringify({\n  systemInstruction: { parts: [{ text: systemPrompt }] },\n  contents: [{ role: 'user', parts: [{ text: userPrompt }] }],\n  generationConfig: {\n    temperature: 0.4,\n    maxOutputTokens: 8192,\n    responseMimeType: 'application/json'\n  }\n});\n\nreturn [{\n  json: {\n    ...prevData,\n    optimized_resume: optResult.optimized_resume || prevData.resume_text,\n    keywords_added: optResult.keywords_added || [],\n    changes_made: optResult.changes_made || [],\n    final_ats_score: optResult.final_ats_score || prevData.ats_score,\n    requestBody,\n    gemini_url: geminiUrl\n  }\n}];"
+      },
+      "id": "node-20-parse-opt",
+      "name": "Code: Parse Opt + Prepare CL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5100, 150]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.gemini_url }}",
+        "authentication": "none",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.requestBody }}",
+        "options": {}
+      },
+      "id": "node-21-gemini-cl",
+      "name": "HTTP: Gemini Cover Letter",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [5350, 150],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ═══════════════════════════════════════════════════\n// PARSE COVER LETTER + FORMAT ROW FOR GOOGLE SHEETS\n// ═══════════════════════════════════════════════════\nconst apiResponse = $input.first().json;\nconst prevData = $('Code: Parse Opt + Prepare CL').first().json;\n\nlet clResult;\ntry {\n  const content = apiResponse.candidates[0].content.parts[0].text;\n  clResult = JSON.parse(content);\n} catch (e) {\n  clResult = {\n    cover_letter: 'Error generating cover letter. Please write manually.',\n    key_highlights: []\n  };\n}\n\nconst today = new Date().toISOString().split('T')[0];\nconst slug = prevData.company.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 15);\n\nreturn [{\n  json: {\n    'Job Title': prevData.job_title,\n    'Company': prevData.company,\n    'Location': prevData.location,\n    'Source': prevData.source || '',\n    'Job URL': prevData.apply_url,\n    'Date Found': prevData.date_found,\n    'Date Applied': today,\n    'ATS Score': prevData.final_ats_score || prevData.ats_score,\n    'Keywords Matched': (prevData.matching_keywords || []).join(', '),\n    'Keywords Added': (prevData.keywords_added || []).join(', '),\n    'Resume Version ID': `RES_${slug}_${today}`,\n    'Cover Letter Version ID': `CL_${slug}_${today}`,\n    'Application Status': 'Manual Apply Required',\n    'Last Updated': today,\n    'Optimized Resume': (prevData.optimized_resume || '').substring(0, 49000),\n    'Cover Letter': clResult.cover_letter || '',\n    'Key Highlights': (clResult.key_highlights || []).join('; '),\n    'Changes Made': (prevData.changes_made || []).join('; '),\n    'Experience Match': prevData.experience_match || '',\n    'Recommendation': prevData.recommendation || ''\n  }\n}];"
+      },
+      "id": "node-22-parse-cl",
+      "name": "Code: Parse CL + Prepare Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5600, 150]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Set Config Variables').first().json.sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "={{ $('Set Config Variables').first().json.sheet_name }}"
+        },
+        "columns": { "mappingMode": "autoMapInputData", "value": {} },
+        "options": {}
+      },
+      "id": "node-23-log-applied",
+      "name": "Google Sheets: Log Applied Job",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [5850, 150],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-cred",
+          "name": "Google Sheets Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ═══════════════════════════════════════════════\n// FORMAT SKIPPED JOB ROW FOR GOOGLE SHEETS\n// ═══════════════════════════════════════════════\nconst item = $input.first().json;\nconst today = new Date().toISOString().split('T')[0];\n\nreturn [{\n  json: {\n    'Job Title': item.job_title,\n    'Company': item.company,\n    'Location': item.location,\n    'Source': item.source || '',\n    'Job URL': item.apply_url,\n    'Date Found': item.date_found,\n    'Date Applied': '',\n    'ATS Score': item.ats_score,\n    'Keywords Matched': (item.matching_keywords || []).join(', '),\n    'Keywords Added': '',\n    'Resume Version ID': '',\n    'Cover Letter Version ID': '',\n    'Application Status': 'Skipped - Low ATS Score',\n    'Last Updated': today,\n    'Optimized Resume': '',\n    'Cover Letter': '',\n    'Key Highlights': '',\n    'Changes Made': '',\n    'Experience Match': item.experience_match || '',\n    'Recommendation': item.recommendation || ''\n  }\n}];"
+      },
+      "id": "node-24-prep-skip",
+      "name": "Code: Prepare Skipped Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4600, 500]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Set Config Variables').first().json.sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "={{ $('Set Config Variables').first().json.sheet_name }}"
+        },
+        "columns": { "mappingMode": "autoMapInputData", "value": {} },
+        "options": {}
+      },
+      "id": "node-25-log-skip",
+      "name": "Google Sheets: Log Skipped Job",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [4850, 500],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-cred",
+          "name": "Google Sheets Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Set Config Variables').first().json.sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "={{ $('Set Config Variables').first().json.sheet_name }}"
+        },
+        "options": {}
+      },
+      "id": "node-26-read-today",
+      "name": "Google Sheets: Read Today Data",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [3600, 600],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-cred",
+          "name": "Google Sheets Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ══════════════════════════════════════════════════\n// GENERATE DAILY APPLICATION SUMMARY REPORT\n// ══════════════════════════════════════════════════\nconst sheetData = $input.all();\nconst config = $('Set Config Variables').first().json;\nconst today = new Date().toISOString().split('T')[0];\n\nconst todaysEntries = sheetData.filter(item => {\n  const df = item.json['Date Found'] || '';\n  const lu = item.json['Last Updated'] || '';\n  return df === today || lu === today;\n});\n\nlet applied = 0, skipped = 0, manualApply = 0, totalScore = 0;\nconst kwMatched = {}, kwAdded = {}, sourceCounts = {};\n\nfor (const entry of todaysEntries) {\n  const status = (entry.json['Application Status'] || '').toString();\n  const score = parseInt(entry.json['ATS Score']) || 0;\n  const src = entry.json['Source'] || 'Unknown';\n  totalScore += score;\n  sourceCounts[src] = (sourceCounts[src] || 0) + 1;\n\n  if (status.includes('Skipped')) skipped++;\n  else if (status.includes('Manual Apply')) { manualApply++; applied++; }\n  else if (status.includes('Applied')) applied++;\n\n  (entry.json['Keywords Matched'] || '').toString().split(', ').filter(k => k.trim()).forEach(kw => {\n    kwMatched[kw.trim()] = (kwMatched[kw.trim()] || 0) + 1;\n  });\n  (entry.json['Keywords Added'] || '').toString().split(', ').filter(k => k.trim()).forEach(kw => {\n    kwAdded[kw.trim()] = (kwAdded[kw.trim()] || 0) + 1;\n  });\n}\n\nconst avgScore = todaysEntries.length > 0 ? Math.round(totalScore / todaysEntries.length) : 0;\n\nconst pill = (kw, count, bg) => `<span style=\"background:${bg};padding:2px 8px;border-radius:12px;margin:2px;display:inline-block;font-size:13px;\">${kw} (${count}x)</span>`;\n\nconst topMatched = Object.entries(kwMatched).sort((a,b) => b[1]-a[1]).slice(0,10).map(([k,c]) => pill(k,c,'#dbeafe')).join(' ');\nconst topAdded = Object.entries(kwAdded).sort((a,b) => b[1]-a[1]).slice(0,10).map(([k,c]) => pill(k,c,'#dcfce7')).join(' ');\n\nconst sourceRows = Object.entries(sourceCounts).map(([src,cnt]) =>\n  `<tr><td style=\"padding:6px 10px;border-bottom:1px solid #e5e7eb;\">${src}</td><td style=\"padding:6px 10px;border-bottom:1px solid #e5e7eb;text-align:center;font-weight:bold;\">${cnt}</td></tr>`\n).join('');\n\nconst topJobs = todaysEntries\n  .filter(e => !(e.json['Application Status']||'').toString().includes('Skipped'))\n  .sort((a,b) => (parseInt(b.json['ATS Score'])||0) - (parseInt(a.json['ATS Score'])||0))\n  .slice(0,5)\n  .map(e => {\n    const url = e.json['Job URL'] && e.json['Job URL'] !== 'N/A'\n      ? `<a href=\"${e.json['Job URL']}\" style=\"color:#2563eb;\">${e.json['Job Title']}</a>` : e.json['Job Title'];\n    return `<tr><td style=\"padding:8px;border-bottom:1px solid #e5e7eb;\">${url}</td><td style=\"padding:8px;border-bottom:1px solid #e5e7eb;\">${e.json['Company']}</td><td style=\"padding:8px;border-bottom:1px solid #e5e7eb;\">${e.json['Source']||''}</td><td style=\"padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;\"><strong>${e.json['ATS Score']}%</strong></td></tr>`;\n  }).join('');\n\nconst reportHtml = `<div style=\"font-family:'Segoe UI',Arial,sans-serif;max-width:680px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;\">\n  <div style=\"background:linear-gradient(135deg,#1e40af,#3b82f6);padding:24px;color:#fff;\">\n    <h1 style=\"margin:0;font-size:22px;\">📊 Daily Job Application Report</h1>\n    <p style=\"margin:8px 0 0;opacity:0.9;\">Date: ${today} | Target: ${config.job_title_input} | AI: Gemini</p>\n  </div>\n  <div style=\"padding:24px;\">\n    <h2 style=\"color:#1e40af;font-size:16px;margin-top:0;\">📈 Summary</h2>\n    <table style=\"width:100%;border-collapse:collapse;margin-bottom:20px;\">\n      <tr style=\"background:#f8fafc;\"><td style=\"padding:10px;border:1px solid #e5e7eb;\">🔍 New Jobs Found</td><td style=\"padding:10px;border:1px solid #e5e7eb;font-weight:bold;text-align:center;\">${todaysEntries.length}</td></tr>\n      <tr><td style=\"padding:10px;border:1px solid #e5e7eb;\">📋 Applications Prepared</td><td style=\"padding:10px;border:1px solid #e5e7eb;font-weight:bold;text-align:center;color:#16a34a;\">${applied}</td></tr>\n      <tr style=\"background:#f8fafc;\"><td style=\"padding:10px;border:1px solid #e5e7eb;\">✋ Manual Apply Required</td><td style=\"padding:10px;border:1px solid #e5e7eb;font-weight:bold;text-align:center;color:#ea580c;\">${manualApply}</td></tr>\n      <tr><td style=\"padding:10px;border:1px solid #e5e7eb;\">⏭️ Skipped (Low Score)</td><td style=\"padding:10px;border:1px solid #e5e7eb;font-weight:bold;text-align:center;color:#dc2626;\">${skipped}</td></tr>\n      <tr style=\"background:#f8fafc;\"><td style=\"padding:10px;border:1px solid #e5e7eb;\">📊 Average ATS Score</td><td style=\"padding:10px;border:1px solid #e5e7eb;font-weight:bold;text-align:center;\">${avgScore}%</td></tr>\n    </table>\n    <h2 style=\"color:#1e40af;font-size:16px;\">🌐 Jobs by Portal</h2>\n    <table style=\"width:100%;border-collapse:collapse;margin-bottom:20px;\"><tr style=\"background:#1e40af;color:#fff;\"><th style=\"padding:8px;text-align:left;\">Source</th><th style=\"padding:8px;text-align:center;\">Count</th></tr>${sourceRows}</table>\n    <h2 style=\"color:#1e40af;font-size:16px;\">🏆 Top Matching Jobs</h2>\n    ${topJobs ? '<table style=\"width:100%;border-collapse:collapse;margin-bottom:20px;\"><tr style=\"background:#1e40af;color:#fff;\"><th style=\"padding:8px;text-align:left;\">Job</th><th style=\"padding:8px;\">Company</th><th style=\"padding:8px;\">Source</th><th style=\"padding:8px;text-align:center;\">ATS</th></tr>' + topJobs + '</table>' : '<p style=\"color:#6b7280;\">No qualifying jobs today.</p>'}\n    <h2 style=\"color:#1e40af;font-size:16px;\">🔑 Top Matched Keywords</h2><p>${topMatched || '<span style=\"color:#6b7280;\">No data</span>'}</p>\n    <h2 style=\"color:#1e40af;font-size:16px;\">➕ Most Added Keywords</h2><p>${topAdded || '<span style=\"color:#6b7280;\">No data</span>'}</p>\n  </div>\n  <div style=\"background:#f8fafc;padding:16px 24px;border-top:1px solid #e5e7eb;\">\n    <p style=\"color:#6b7280;font-size:12px;margin:0;\">Powered by Gemini ${config.gemini_model} | <a href=\"https://docs.google.com/spreadsheets/d/${config.sheet_id}\" style=\"color:#2563eb;\">View Tracking Sheet →</a></p>\n  </div>\n</div>`;\n\nreturn [{ json: { report_html: reportHtml, subject: `📊 Job Report — ${today} — ${applied} Apps | ${todaysEntries.length} Found (${Object.keys(sourceCounts).length} portals)` } }];"
+      },
+      "id": "node-27-report",
+      "name": "Code: Generate Daily Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3850, 600]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Set Config Variables').first().json.notification_email }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.report_html }}",
+        "options": {}
+      },
+      "id": "node-28-gmail",
+      "name": "Gmail: Send Daily Report",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [4100, 600],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "gmail-cred",
+          "name": "Gmail Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## 📋 Configuration\n\n**Edit \"Set Config Variables\"** to set:\n- Job title, resume file ID, LinkedIn text\n- **Gemini API key** & model (default: gemini-2.0-flash)\n- **SerpAPI key** (Google Jobs search)\n- **RapidAPI key** (JSearch — LinkedIn/Indeed/Glassdoor)\n- **Adzuna app_id & api_key** (Adzuna jobs)\n- RemoteOK needs no key (free API)\n- Google Sheet ID, notification email, ATS threshold",
+        "height": 380,
+        "width": 850,
+        "color": 4
+      },
+      "id": "note-01",
+      "name": "Sticky Note: Config",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [180, 50]
+    },
+    {
+      "parameters": {
+        "content": "## 🌐 Multi-Portal Job Discovery\n\n4 job portals searched in parallel chain:\n\n1️⃣ **SerpAPI Google Jobs** — Google's job aggregator\n2️⃣ **JSearch (RapidAPI)** — LinkedIn, Indeed, Glassdoor, ZipRecruiter\n3️⃣ **Adzuna** — Aggregates from 1000+ job boards\n4️⃣ **RemoteOK** — Remote-first positions (free, no auth)\n\nAll results are **normalized** into a standard format\nand **deduplicated** against the Google Sheet.\n\nEach node has `onError: continueRegularOutput` so\none failing portal won't stop the others.",
+        "height": 380,
+        "width": 900,
+        "color": 6
+      },
+      "id": "note-02",
+      "name": "Sticky Note: Search",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1230, 50]
+    },
+    {
+      "parameters": {
+        "content": "## 🤖 Gemini AI ATS Analysis Loop\n\nProcesses each job ONE AT A TIME.\n\n**Gemini 2.0 Flash** analyzes:\n- Keyword extraction & matching\n- Skill overlap percentage\n- ATS compatibility score (0-100)\n\n`responseMimeType: application/json` ensures\nstructured JSON output from Gemini.\n\nScore ≥ 50 → Optimization ↗\nScore < 50 → Skip & Log ↘",
+        "height": 380,
+        "width": 850,
+        "color": 2
+      },
+      "id": "note-03",
+      "name": "Sticky Note: Analysis",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [3280, 50]
+    },
+    {
+      "parameters": {
+        "content": "## ✅ Resume Optimization & Cover Letter (Gemini)\n\n**Resume Optimization** — STRICT RULES:\n- Add missing ATS keywords aligned with experience\n- Reorder bullets for relevance\n- ❌ No fabrication, no content changes\n\n**Cover Letter** — Per-job customized:\n- References company & role by name\n- Highlights matching experience\n- Professional, concise, no generic language",
+        "height": 280,
+        "width": 1400,
+        "color": 5
+      },
+      "id": "note-04",
+      "name": "Sticky Note: Optimization",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [4530, -70]
+    },
+    {
+      "parameters": {
+        "content": "## ⏭️ Low Score Skip\n\nJobs below ATS threshold logged\nas **\"Skipped - Low ATS Score\"**\nwith analysis data for review.",
+        "height": 220,
+        "width": 420,
+        "color": 3
+      },
+      "id": "note-05",
+      "name": "Sticky Note: Skip",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [4530, 380]
+    },
+    {
+      "parameters": {
+        "content": "## 📊 Daily Reporting\n\nAfter all jobs processed:\n1. Reads today's sheet entries\n2. Stats: applied, skipped, avg score\n3. **Jobs by portal** breakdown\n4. Top keywords & best matches\n5. Sends HTML email report",
+        "height": 280,
+        "width": 600,
+        "color": 7
+      },
+      "id": "note-06",
+      "name": "Sticky Note: Reporting",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [3530, 470]
+    },
+    {
+      "parameters": {
+        "content": "## 🔄 Dedup & Routing\n\nCompares new jobs against existing\nGoogle Sheet entries by Company+Title\nand Job URL. Only unique jobs proceed.",
+        "height": 380,
+        "width": 480,
+        "color": 1
+      },
+      "id": "note-07",
+      "name": "Sticky Note: Dedup",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [2530, 50]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [[{ "node": "Set Config Variables", "type": "main", "index": 0 }]]
+    },
+    "Set Config Variables": {
+      "main": [[{ "node": "Google Drive: Download Resume", "type": "main", "index": 0 }]]
+    },
+    "Google Drive: Download Resume": {
+      "main": [[{ "node": "Code: Extract Resume Text", "type": "main", "index": 0 }]]
+    },
+    "Code: Extract Resume Text": {
+      "main": [[{ "node": "HTTP: SerpAPI Google Jobs", "type": "main", "index": 0 }]]
+    },
+    "HTTP: SerpAPI Google Jobs": {
+      "main": [[{ "node": "HTTP: JSearch (LinkedIn/Indeed)", "type": "main", "index": 0 }]]
+    },
+    "HTTP: JSearch (LinkedIn/Indeed)": {
+      "main": [[{ "node": "HTTP: Adzuna Jobs", "type": "main", "index": 0 }]]
+    },
+    "HTTP: Adzuna Jobs": {
+      "main": [[{ "node": "HTTP: RemoteOK", "type": "main", "index": 0 }]]
+    },
+    "HTTP: RemoteOK": {
+      "main": [[{ "node": "Code: Parse & Merge All Jobs", "type": "main", "index": 0 }]]
+    },
+    "Code: Parse & Merge All Jobs": {
+      "main": [[{ "node": "Google Sheets: Read Existing", "type": "main", "index": 0 }]]
+    },
+    "Google Sheets: Read Existing": {
+      "main": [[{ "node": "Code: Deduplicate Jobs", "type": "main", "index": 0 }]]
+    },
+    "Code: Deduplicate Jobs": {
+      "main": [[{ "node": "IF: New Jobs Found", "type": "main", "index": 0 }]]
+    },
+    "IF: New Jobs Found": {
+      "main": [
+        [{ "node": "Split In Batches", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Split In Batches": {
+      "main": [
+        [{ "node": "Code: Prepare ATS Request", "type": "main", "index": 0 }],
+        [{ "node": "Google Sheets: Read Today Data", "type": "main", "index": 0 }]
+      ]
+    },
+    "Code: Prepare ATS Request": {
+      "main": [[{ "node": "HTTP: Gemini ATS Analysis", "type": "main", "index": 0 }]]
+    },
+    "HTTP: Gemini ATS Analysis": {
+      "main": [[{ "node": "Code: Parse ATS Results", "type": "main", "index": 0 }]]
+    },
+    "Code: Parse ATS Results": {
+      "main": [[{ "node": "IF: Score Above Threshold", "type": "main", "index": 0 }]]
+    },
+    "IF: Score Above Threshold": {
+      "main": [
+        [{ "node": "Code: Prepare Resume Opt Request", "type": "main", "index": 0 }],
+        [{ "node": "Code: Prepare Skipped Row", "type": "main", "index": 0 }]
+      ]
+    },
+    "Code: Prepare Resume Opt Request": {
+      "main": [[{ "node": "HTTP: Gemini Resume Optimization", "type": "main", "index": 0 }]]
+    },
+    "HTTP: Gemini Resume Optimization": {
+      "main": [[{ "node": "Code: Parse Opt + Prepare CL", "type": "main", "index": 0 }]]
+    },
+    "Code: Parse Opt + Prepare CL": {
+      "main": [[{ "node": "HTTP: Gemini Cover Letter", "type": "main", "index": 0 }]]
+    },
+    "HTTP: Gemini Cover Letter": {
+      "main": [[{ "node": "Code: Parse CL + Prepare Row", "type": "main", "index": 0 }]]
+    },
+    "Code: Parse CL + Prepare Row": {
+      "main": [[{ "node": "Google Sheets: Log Applied Job", "type": "main", "index": 0 }]]
+    },
+    "Google Sheets: Log Applied Job": {
+      "main": [[{ "node": "Split In Batches", "type": "main", "index": 0 }]]
+    },
+    "Code: Prepare Skipped Row": {
+      "main": [[{ "node": "Google Sheets: Log Skipped Job", "type": "main", "index": 0 }]]
+    },
+    "Google Sheets: Log Skipped Job": {
+      "main": [[{ "node": "Split In Batches", "type": "main", "index": 0 }]]
+    },
+    "Google Sheets: Read Today Data": {
+      "main": [[{ "node": "Code: Generate Daily Report", "type": "main", "index": 0 }]]
+    },
+    "Code: Generate Daily Report": {
+      "main": [[{ "node": "Gmail: Send Daily Report", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "versionId": "ats-pipeline-v2-gemini",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "ats-job-pipeline-gemini-001"
+  },
+  "tags": []
+}
